@@ -1,46 +1,63 @@
-ubuntu@ip-172-31-36-189:~$ cat install_hadoop_hive2.sh 
 #!/bin/bash
 set -e
 
 ########################################
-# Script: install_hadoop_hive.sh (Java 8 compatible)
-# Purpose: Clean install Hadoop 3.3.6 + Hive 3.1.3 with Java 8 compatibility
+# Script: install_hadoop_hive2.sh
+# Final: Hadoop 3.3.6 + Hive 3.1.3 setup (Java 8)
 ########################################
 
-# === Set environment ===
+# === ENV Setup ===
 export JAVA_HOME="/usr/lib/jvm/java-8-openjdk-amd64"
 export HADOOP_HOME="/usr/local/hadoop"
 export HIVE_HOME="/usr/local/hive"
+export HADOOP_CONF_DIR="$HADOOP_HOME/etc/hadoop"
 export PATH="$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$HIVE_HOME/bin:$PATH"
-HDFS_USER="ubuntu"
-NAMENODE_DIR="$HADOOP_HOME/hdfs/namenode"
-DATANODE_DIR="$HADOOP_HOME/hdfs/datanode"
+
+echo "💻 Exporting environment variables..."
+echo "export JAVA_HOME=$JAVA_HOME" >> ~/.bashrc
+echo "export HADOOP_HOME=$HADOOP_HOME" >> ~/.bashrc
+echo "export HIVE_HOME=$HIVE_HOME" >> ~/.bashrc
+echo 'export PATH=$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$HIVE_HOME/bin:$PATH' >> ~/.bashrc
+echo "export HADOOP_CONF_DIR=$HADOOP_CONF_DIR" >> ~/.bashrc
+source ~/.bashrc
+
 MYSQL_ROOT_PASS="X9085565r@"
 MYSQL_JDBC_JAR="/home/ubuntu/mysql-connector-j-8.0.31.jar"
+NAMENODE_DIR="$HADOOP_HOME/hdfs/namenode"
+DATANODE_DIR="$HADOOP_HOME/hdfs/datanode"
 
-# === Ensure Java 8 is installed ===
-echo "\n🧪 Checking for Java 8..."
-if ! java -version 2>&1 | grep -q "1.8"; then
-  echo "Installing OpenJDK 8..."
-  sudo apt update
-  sudo apt install openjdk-8-jdk -y
-fi
+# === Java 8 Check ===
+echo "🥪 Checking Java 8..."
+java -version 2>&1 | grep "1.8" || sudo apt update && sudo apt install openjdk-8-jdk -y
 
-# === Cleanup Hadoop ===
-echo "\n🧹 Cleaning previous Hadoop installation..."
-sudo $HADOOP_HOME/sbin/stop-dfs.sh || true
-sudo $HADOOP_HOME/sbin/stop-yarn.sh || true
+# === SSH Setup ===
+echo "🔐 Configuring SSH for localhost..."
+[ ! -f ~/.ssh/id_rsa ] && ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+echo -e "Host localhost\n\tStrictHostKeyChecking no\n" >> ~/.ssh/config
+chmod 600 ~/.ssh/config
+sudo service ssh restart
+
+# === Cleanup Previous Services and Ports ===
+echo "🧹 Cleaning old processes and ports..."
 pkill -f NameNode || true
 pkill -f DataNode || true
 pkill -f ResourceManager || true
 pkill -f NodeManager || true
+pkill -f SecondaryNameNode || true
+lsof -ti :9870 | xargs -r sudo kill -9
+for port in 9864 8088 10000 9083; do lsof -ti :$port | xargs -r sudo kill -9; done
+
+# === Cleanup Hadoop Directories ===
+echo "🪜 Cleaning Hadoop data & logs..."
 sudo rm -rf $HADOOP_HOME/hdfs $HADOOP_HOME/logs/* /tmp/hadoop-* ~/.hadoop/
 sudo mkdir -p $NAMENODE_DIR $DATANODE_DIR
 sudo chown -R $USER:$USER $HADOOP_HOME
 
-# === Hadoop XML Configs ===
-echo "\n⚙️ Generating Hadoop configs..."
-cat > $HADOOP_HOME/etc/hadoop/core-site.xml <<EOF
+# === Hadoop Config ===
+echo "⚙️ Generating Hadoop configs..."
+cat > $HADOOP_CONF_DIR/core-site.xml <<EOF
 <configuration>
   <property>
     <name>fs.defaultFS</name>
@@ -49,7 +66,7 @@ cat > $HADOOP_HOME/etc/hadoop/core-site.xml <<EOF
 </configuration>
 EOF
 
-cat > $HADOOP_HOME/etc/hadoop/hdfs-site.xml <<EOF
+cat > $HADOOP_CONF_DIR/hdfs-site.xml <<EOF
 <configuration>
   <property>
     <name>dfs.replication</name>
@@ -66,7 +83,7 @@ cat > $HADOOP_HOME/etc/hadoop/hdfs-site.xml <<EOF
 </configuration>
 EOF
 
-cat > $HADOOP_HOME/etc/hadoop/yarn-site.xml <<EOF
+cat > $HADOOP_CONF_DIR/yarn-site.xml <<EOF
 <configuration>
   <property>
     <name>yarn.nodemanager.aux-services</name>
@@ -75,7 +92,7 @@ cat > $HADOOP_HOME/etc/hadoop/yarn-site.xml <<EOF
 </configuration>
 EOF
 
-cat > $HADOOP_HOME/etc/hadoop/mapred-site.xml <<EOF
+cat > $HADOOP_CONF_DIR/mapred-site.xml <<EOF
 <configuration>
   <property>
     <name>mapreduce.framework.name</name>
@@ -84,42 +101,42 @@ cat > $HADOOP_HOME/etc/hadoop/mapred-site.xml <<EOF
 </configuration>
 EOF
 
-sed -i "/^export JAVA_HOME/c\export JAVA_HOME=$JAVA_HOME" $HADOOP_HOME/etc/hadoop/hadoop-env.sh
+sed -i "/^export JAVA_HOME/c\export JAVA_HOME=$JAVA_HOME" $HADOOP_CONF_DIR/hadoop-env.sh
 
-# === Format and Start Hadoop ===
-echo "\n🧱 Formatting HDFS..."
+# === Format HDFS ===
+echo "🧱 Formatting HDFS..."
 hdfs namenode -format -force
 
+# === Export Daemon Users ===
 export HDFS_NAMENODE_USER=$USER
 export HDFS_DATANODE_USER=$USER
 export HDFS_SECONDARYNAMENODE_USER=$USER
 export YARN_RESOURCEMANAGER_USER=$USER
 export YARN_NODEMANAGER_USER=$USER
 
-echo "\n🚀 Starting HDFS and YARN..."
+# === Start Hadoop ===
+echo "🚀 Starting Hadoop Services..."
 $HADOOP_HOME/sbin/start-dfs.sh
 $HADOOP_HOME/sbin/start-yarn.sh
-sleep 5
+sleep 10
 
-# === Verify Hadoop ===
-echo "\n📋 Verifying Hadoop Daemons..."
-jps | grep -E "NameNode|DataNode|SecondaryNameNode|ResourceManager|NodeManager"
+echo "📋 Checking Hadoop daemons..."
+jps
 
-# === Create HDFS Directories ===
-echo "\n📁 Creating user and warehouse dirs in HDFS..."
+# === HDFS Directories ===
+echo "📁 Creating Hive HDFS directories..."
 hdfs dfs -mkdir -p /user/$USER
 hdfs dfs -mkdir -p /user/hive/warehouse
 hdfs dfs -chmod -R 777 /user/hive/warehouse
 
 # === Cleanup Hive ===
-echo "\n🧹 Cleaning previous Hive setup..."
+echo "🧹 Resetting Hive setup..."
 pkill -f "hive.*metastore" || true
 pkill -f "hive.*hiveserver2" || true
-sudo rm -rf $HIVE_HOME/logs/*
-sudo rm -rf /tmp/hive/*
+rm -rf /tmp/hive/* $HIVE_HOME/logs/*
 
-# === MySQL Setup ===
-echo "\n🛠️ Configuring Hive Metastore in MySQL..."
+# === MySQL Hive Metastore Setup ===
+echo "🛠️ Configuring Hive Metastore DB..."
 mysql -u root -p"$MYSQL_ROOT_PASS" <<EOF
 DROP DATABASE IF EXISTS hive_metastore;
 CREATE DATABASE hive_metastore;
@@ -131,11 +148,27 @@ EOF
 
 cp "$MYSQL_JDBC_JAR" "$HIVE_HOME/lib/"
 
-# === Configure hive-site.xml ===
-echo "\n⚙️ Configuring Hive..."
+# === Hive Config ===
+echo "⚙️ Setting hive-site.xml..."
 mkdir -p $HIVE_HOME/conf
 cat > $HIVE_HOME/conf/hive-site.xml <<EOF
 <configuration>
+  <property>
+    <name>hive.server2.transport.mode</name>
+    <value>binary</value>
+  </property>
+  <property>
+    <name>hive.server2.thrift.port</name>
+    <value>10000</value>
+  </property>
+  <property>
+    <name>hive.server2.thrift.bind.host</name>
+    <value>0.0.0.0</value>
+  </property>
+  <property>
+    <name>hive.server2.authentication</name>
+    <value>NONE</value>
+  </property>
   <property>
     <name>javax.jdo.option.ConnectionURL</name>
     <value>jdbc:mysql://localhost:3306/hive_metastore?createDatabaseIfNotExist=true</value>
@@ -163,25 +196,44 @@ cat > $HIVE_HOME/conf/hive-site.xml <<EOF
 </configuration>
 EOF
 
-# === Init Schema ===
-echo "\n🧱 Initializing Hive schema..."
-$HIVE_HOME/bin/schematool -initSchema -dbType mysql || true
+# === Set HEAP Size ===
+echo "🔧 Setting HEAP size..."
+export HADOOP_HEAPSIZE=1024
+export HIVE_SERVER2_HEAPSIZE=1024
 
-# === Start Hive ===
-echo "\n🚀 Starting Hive Metastore & HiveServer2..."
+# === Initialize Hive Schema ===
+echo "🧱 Initializing Hive Schema..."
+$HIVE_HOME/bin/schematool -initSchema -dbType mysql --verbose
+
+# === Start Hive Services ===
+echo "🚀 Starting Hive Services..."
 nohup $HIVE_HOME/bin/hive --service metastore > ~/hive_metastore.log 2>&1 &
 sleep 10
+if netstat -tuln | grep -q 9083; then
+  echo "✅ Hive Metastore running on port 9083"
+else
+  echo "❌ Hive Metastore failed to start. Check ~/hive_metastore.log"
+  exit 1
+fi
+
 nohup $HIVE_HOME/bin/hive --service hiveserver2 > ~/hive_server2.log 2>&1 &
 sleep 15
+if netstat -tuln | grep -q 10000; then
+  echo "✅ HiveServer2 running on port 10000"
+else
+  echo "❌ HiveServer2 failed to start. Check ~/hive_server2.log"
+  exit 1
+fi
 
-# === Verify Hive ===
-echo "\n📋 Verifying Hive CLI..."
+# === Validate Hive ===
+echo "📋 Validating Hive CLI..."
 hive -e "SHOW DATABASES;"
 
+echo "📋 Validating Beeline..."
 beeline -u jdbc:hive2://localhost:10000 -n $USER -e "SHOW TABLES;"
 
 # === Sample Table ===
-echo "\n📊 Creating demo table..."
+echo "📊 Creating demo table..."
 hive -e "
 CREATE DATABASE IF NOT EXISTS demo;
 USE demo;
@@ -190,4 +242,4 @@ INSERT INTO test_table VALUES (1, 'Alice'), (2, 'Bob');
 SELECT * FROM test_table;
 "
 
-echo "\n✅ Hadoop and Hive (Java 8) setup complete. Ready to use!"
+echo "✅ Hadoop + Hive installation successful!"
