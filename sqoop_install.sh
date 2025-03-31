@@ -2,9 +2,7 @@
 set -e
 
 echo "📦 Downloading and Installing Sqoop 1.4.7..."
-cd /opt
-wget -q https://archive.apache.org/dist/sqoop/1.4.7/sqoop-1.4.7.bin__hadoop-2.6.0.tar.gz
-tar -xzf sqoop-1.4.7.bin__hadoop-2.6.0.tar.gz
+
 sudo mv sqoop-1.4.7.bin__hadoop-2.6.0 /usr/local/sqoop
 
 echo "🔧 Setting Environment Variables for Sqoop..."
